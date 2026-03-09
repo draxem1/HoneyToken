@@ -1,40 +1,29 @@
 use std::net::TcpStream;
 use std::io::{self, Write, BufRead, BufReader};
 use std::process::{Command, Stdio};
-
 use serde::{Serialize, Deserialize};
 use regex::Regex;
 
-enum Connection {
-    Active,
-    Failed,
-}
-
 #[derive(Serialize, Deserialize)]
 struct SshLog<'a> {
-    connection: &'a str,
+    event: &'a str,
     ip: &'a str,
     user: &'a str,
     process: &'a str,
     date: &'a str,
     time: &'a str,
+    hostname: String,
+    severity: &'a str,
 }
 
-/*****
-fn parse_ssh_log(line: &str, re: &Regex) -> Option<SshLog> {
-    if let Some(caps) = re.captures(line) {
-        Some(SshLog {
-            ip: caps["ip"].to_string(),
-            user: caps["user"].to_string(),
-            process: "sshd".to_string(),
-            time: caps["time"].to_string(),
-        })
-    } else {
-        None
-    }
+fn event_severity<'a>(event: &'a str) -> &'a str{
+    match event {
+        "ssh_login" => "CRITICAL_HONEYPOT_ACCESS",
+        _ => "NO_WORRIES",
+    } 
 }
-********/
-fn parse_ssh_log(line: &str) -> SshLog {
+
+fn parse_ssh_log<'a>(line: &'a str, event: &'a str) -> SshLog<'a> {
     let date = {
         let re = Regex::new(r"(?P<date>\w+\s+\d+)").unwrap();
         let caps = re.find(line).unwrap();
@@ -48,6 +37,7 @@ fn parse_ssh_log(line: &str) -> SshLog {
     let user = {
         let re = Regex::new(r"for\s+(?P<user>\w+)").unwrap();
         let mut user_name = "";
+
         for caps in re.captures_iter(line) {
         // Access the named group "user"
             if let Some(user_match) = caps.name("user") {
@@ -61,36 +51,39 @@ fn parse_ssh_log(line: &str) -> SshLog {
         let caps = re.find(line).unwrap();
         caps
     }; 
+    let status = Command::new("hostname")
+        .output()
+        .expect("No Hostname");
+    let host = str::from_utf8(&status.stdout).unwrap();
+
     SshLog {
-        connection: "Accepted",
+        event: event,  
         ip: ip.as_str(),
         user: user,
-        process: "ssh",
+        process: "sshd",
         date: date.as_str(),
         time: time.as_str(),
+        hostname: host.trim().to_string(), 
+        severity: event_severity(event),
     }
 }
 
-fn accepted_connection(line: &str) {
-    let log = parse_ssh_log(line);    
+fn accepted_connection(line: &str, mut stream: &TcpStream) -> Result<(), Box<dyn std::error::Error>> {
+    let log = parse_ssh_log(line, "ssh_login");    
     let json = serde_json::to_string_pretty(&log).unwrap();
-
     println!("{}", json);
 
-    //stream.write_all(json.as_bytes())?;
-    //stream.write_all(b"\n")?;
+    stream.write_all(json.as_bytes())?;
+    stream.write_all(b"\n")?;
+    Ok(())
+
 }
 
 fn failed_connection(line: &str) {
     println!("{}", line);
 }
 
-fn stream_ssh_logs(mut stream: TcpStream) -> io::Result<()> {
-    /*****
-    let regex = Regex::new(
-        r"(?P<time>\w+\s+\d+\s+\d+:\d+:\d+).*sshd.*Accepted.*for\s+(?P<user>\w+)\s+from\s+(?P<ip>\d+\.\d+\.\d+\.\d+)"
-    ).unwrap();
-*****/
+fn stream_ssh_logs(stream: TcpStream) -> io::Result<()> {
     let re = Regex::new(r"(?P<connection>(Accepted|Failed))").unwrap();
     let mut child = Command::new("journalctl")
         .arg("-u")
@@ -110,25 +103,15 @@ fn stream_ssh_logs(mut stream: TcpStream) -> io::Result<()> {
 
         if re.is_match(&line){
             let caps = re.find(&line).unwrap();
+
             match caps.as_str() {
-                "Accepted" => accepted_connection(&line),
+                "Accepted" => accepted_connection(&line, &stream).unwrap(),
                 "Failed" => failed_connection(&line),
                 &_ => println!("No Connections"),
             }
         } else {
             //println!("No Connections");
         }
-/******
-        if let Some(log) = parse_ssh_log(&line, &regex) {
-
-            let json = serde_json::to_string_pretty(&log).unwrap();
-
-            println!("{}", json);
-
-            stream.write_all(json.as_bytes())?;
-            stream.write_all(b"\n")?;
-        }
-******/
     }
 
     Ok(())
