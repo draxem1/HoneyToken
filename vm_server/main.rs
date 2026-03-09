@@ -10,6 +10,7 @@ struct SshLog<'a> {
     ip: &'a str,
     user: &'a str,
     process: &'a str,
+    mac: String,
     date: &'a str,
     time: &'a str,
     hostname: String,
@@ -56,11 +57,24 @@ fn parse_ssh_log<'a>(line: &'a str, event: &'a str) -> SshLog<'a> {
         .expect("No Hostname");
     let host = str::from_utf8(&status.stdout).unwrap();
 
+    let mac = {
+        let status = Command::new("arp")
+            .arg("-a")
+            .arg(&ip.as_str())
+            .output()
+            .expect("Can't get MAC ADDRESS");
+        let mac = str::from_utf8(&status.stdout).unwrap();
+        let re = Regex::new(r"([0-9A-Fa-f]{2})\:([0-9A-Fa-f]{2})\:([0-9A-Fa-f]{2})\:([0-9A-Fa-f]{2})\:([0-9A-Fa-f]{2})\:([0-9A-Fa-f]{2})").unwrap();
+        let caps = re.find(mac).unwrap();
+        format!("{}", caps.as_str())
+    };
+
     SshLog {
         event: event,  
         ip: ip.as_str(),
         user: user,
         process: "sshd",
+        mac: mac,
         date: date.as_str(),
         time: time.as_str(),
         hostname: host.trim().to_string(), 
@@ -68,22 +82,17 @@ fn parse_ssh_log<'a>(line: &'a str, event: &'a str) -> SshLog<'a> {
     }
 }
 
-fn accepted_connection(line: &str, mut stream: &TcpStream) -> Result<(), Box<dyn std::error::Error>> {
+fn accepted_connection(line: &str) -> String {
     let log = parse_ssh_log(line, "ssh_login");    
     let json = serde_json::to_string_pretty(&log).unwrap();
-    println!("{}", json);
-
-    stream.write_all(json.as_bytes())?;
-    stream.write_all(b"\n")?;
-    Ok(())
-
+    json
 }
 
-fn failed_connection(line: &str) {
-    println!("{}", line);
+fn failed_connection(line: &str) -> String {
+    line.to_string()
 }
 
-fn stream_ssh_logs(stream: TcpStream) -> io::Result<()> {
+fn stream_ssh_logs(mut stream: TcpStream) -> io::Result<()> {
     let re = Regex::new(r"(?P<connection>(Accepted|Failed))").unwrap();
     let mut child = Command::new("journalctl")
         .arg("-u")
@@ -103,14 +112,17 @@ fn stream_ssh_logs(stream: TcpStream) -> io::Result<()> {
 
         if re.is_match(&line){
             let caps = re.find(&line).unwrap();
-
+            let json; 
+            
             match caps.as_str() {
-                "Accepted" => accepted_connection(&line, &stream).unwrap(),
-                "Failed" => failed_connection(&line),
-                &_ => println!("No Connections"),
+                "Accepted" => json = accepted_connection(&line),
+                "Failed" => json = failed_connection(&line),
+                &_ => json = "".to_string(), 
             }
-        } else {
-            //println!("No Connections");
+            println!("{}", &json);
+
+            stream.write_all(json.as_bytes())?;
+            stream.write_all(b"\n")?;
         }
     }
 
