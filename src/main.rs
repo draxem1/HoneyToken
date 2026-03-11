@@ -1,61 +1,86 @@
-// host server
-use regex::Regex;
-use std::io::Read;
-use std::net::TcpListener;
-use std::process::Command;
+use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncBufReadExt, BufReader};
 
-fn get_ip() -> String {
-    // Matches an octet (0-255)
-    let octet = r"(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])";
-    // Matches a full IPv4 address using the octet pattern
-    let re = Regex::new(&format!(
-        r"\b({})\.({})\.({})\.({})\b",
-        octet, octet, octet, octet
-    ))
-    .unwrap();
+use serde::{Deserialize, Serialize};
 
-    let output = Command::new("ip")
-        .arg("a")
-        .output()
-        .expect("Failed to get IP");
-
-    let mut ips = Vec::new();
-    if output.status.success() {
-        let stdout = str::from_utf8(&output.stdout).expect("Not valid UTF-8");
-
-        for ipv4 in re.find_iter(stdout) {
-            ips.push(ipv4.as_str());
-        }
-    } else {
-        let stderr = str::from_utf8(&output.stderr).expect("Not valid UTF-8");
-        eprintln!("Command failed with error:\n{}", stderr);
-    }
-
-    //Skip localhost and get your Ip
-    String::from(ips[1])
+#[derive(Debug, Serialize, Deserialize)]
+struct SshLog {
+    event: String,
+    ip: String,
+    user: String,
+    process: String,
+    hostname: String,
+    severity: String,
 }
 
-fn main() -> std::io::Result<()> {
-    let ip = get_ip();
-    //Listen on available port
-    let listener = TcpListener::bind("0.0.0.0:8080")?;
+async fn detect_attack(log: &SshLog) {
 
-    println!("Server Listening on 0.0.0.0:8080");
-    println!("Set vm server on {}", ip);
+    if log.severity == "CRITICAL_HONEYPOT_ACCESS" {
+        println!(
+            "\n🚨 CRITICAL ALERT 🚨
+Host: {}
+User: {}
+Attacker IP: {}
+Process: {}
+",
+            log.hostname,
+            log.user,
+            log.ip,
+            log.process
+        );
+    }
+}
 
-    for stream in listener.incoming() {
-        match stream {
-            Ok(mut stream) => {
-                println!("Client connected!");
-                let mut buffer = String::new();
-                //Read the data sent from the VM client
-                stream.read_to_string(&mut buffer)?;
-                println!("Recieved data: {}", buffer);
+async fn handle_client(stream: TcpStream) -> Result<(), Box<dyn std::error::Error>> {
+
+    let addr = stream.peer_addr()?;
+    println!("Sensor connected: {}", addr);
+
+    let reader = BufReader::new(stream);
+    let mut lines = reader.lines();
+
+    while let Some(line) = lines.next_line().await? {
+
+        match serde_json::from_str::<SshLog>(&line) {
+
+            Ok(log) => {
+
+                println!("Event: {:?}", log);
+
+                detect_attack(&log).await;
             }
-            Err(e) => {
-                eprintln!("Connection failed: {}", e);
+
+            Err(_) => {
+                println!("Malformed telemetry: {}", line);
             }
         }
     }
+
+    println!("Sensor disconnected: {}", addr);
+
     Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+
+    let listener = TcpListener::bind("0.0.0.0:8080").await?;
+
+    println!("HoneySecret Logging Server Running");
+    println!("Listening on port 8080\n");
+
+    loop {
+
+        let (stream, addr) = listener.accept().await?;
+
+        println!("Incoming sensor: {}", addr);
+
+        tokio::spawn(async move {
+
+            if let Err(e) = handle_client(stream).await {
+                println!("Client error: {}", e);
+            }
+
+        });
+    }
 }
