@@ -79,12 +79,12 @@ Responsibilities:
 
 Example log entry:
 
-> 2026-02-28T12:15:03Z
-> IP: 185.220.101.3
-> ASN: AS9009
-> Country: Germany
-> User: root
-> Command: cat passwords.txt
+- 2026-02-28T12:15:03Z
+- IP: 185.220.101.3
+- ASN: AS9009
+- Country: Germany
+- User: root
+- Command: cat passwords.txt
 
 
 ---
