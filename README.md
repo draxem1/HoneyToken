@@ -1,7 +1,7 @@
 # HoneyToken 🍯🔐
 A deception-based security project that tracks attackers who steal sensitive files.
 
-HoneySecret is a defensive security system designed to detect, track, and analyze attackers after a system compromise. Instead of preventing the theft of sensitive data, HoneySecret uses a decoy file that appears valuable to attackers but secretly reports back telemetry about the attacker when accessed.
+HoneyToken is a defensive security system designed to detect, track, and analyze attackers after a system compromise. Instead of preventing the theft of sensitive data, HoneyToken uses a decoy file that appears valuable to attackers but secretly reports back telemetry about the attacker when accessed.
 
 The goal is to gather intelligence such as IP address, ASN, geolocation, and attacker behavior while remaining stealthy.
 
@@ -79,19 +79,19 @@ Responsibilities:
 
 Example log entry:
 
-2026-02-28T12:15:03Z
-IP: 185.220.101.3
-ASN: AS9009
-Country: Germany
-User: root
-Command: cat passwords.txt
+> 2026-02-28T12:15:03Z
+> IP: 185.220.101.3
+> ASN: AS9009
+> Country: Germany
+> User: root
+> Command: cat passwords.txt
 
 
 ---
 
 ## Example Data Collected
 
-HoneySecret attempts to collect:
+HoneyToken attempts to collect:
 
 | Field | Description |
 |-----|-----|
