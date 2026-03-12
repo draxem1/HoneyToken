@@ -1,9 +1,14 @@
-use std::net::TcpStream;
-use std::io::{self, Write, BufRead, BufReader};
-use std::process::{Command, Stdio};
+//use std::net::TcpStream;
+//use std::io::{self, Write, BufRead, BufReader};
+//use std::process::{Command, Stdio};
+use std::process::Stdio;
 use once_cell::sync::Lazy;
 use serde::{Serialize, Deserialize};
 use regex::Regex;
+use tokio::net::TcpStream;
+use tokio::process::Command;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
 
 #[derive(Serialize, Deserialize)]
 struct SshLog {
@@ -16,14 +21,15 @@ struct SshLog {
     severity: String,
 }
 
-//Compile once an reuse; Increased speed
 static SSH_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(Accepted|Failed)").unwrap()
+    Regex::new(r"(?P<date>\w+{3}\s+\d+\s+\d+\:\d+\:\d+).*(?P<status>Accepted|Failed).*for\s+(?P<user>\w+).*from\s+(?P<ip>\d+\.\d+\.\d+\.\d+)")
+ .unwrap()
 });
 
-fn hostname() -> String {
+async fn hostname() -> String {
     let output = Command::new("hostname")
         .output()
+        .await
         .expect("hostname failed");
 
     String::from_utf8_lossy(&output.stdout).trim().to_string()
@@ -59,6 +65,7 @@ fn parse_ssh_log(line: &str, host: &str, re: &Regex) -> Option<SshLog> {
     None
 }
 
+/***************************************
 fn stream_ssh_logs(mut stream: TcpStream) -> io::Result<()> {
 
     let host = hostname();
@@ -101,7 +108,60 @@ fn stream_ssh_logs(mut stream: TcpStream) -> io::Result<()> {
 
     Ok(())
 }
+**************************************************/
 
+async fn stream_ssh_logs(mut stream: TcpStream) -> Result<(), Box<dyn std::error::Error>> {
+
+    let host = hostname().await;
+
+    let mut child = Command::new("journalctl")
+        .arg("-u")
+        .arg("ssh")
+        .arg("-f")
+        .arg("--since")
+        .arg("now")
+        .stdout(Stdio::piped())
+        .spawn()?;
+
+    let stdout = child.stdout.take().unwrap();
+
+    let reader = BufReader::new(stdout);
+    let mut lines = reader.lines();
+
+    println!("Watching SSH logs...");
+
+    while let Some(line) = lines.next_line().await? {
+
+        if SSH_RE.is_match(&line) {
+
+            let log = parse_ssh_log(&line, &host, &SSH_RE);
+            let json = serde_json::to_string(&log)?;
+
+            println!("{:#?}", json);
+
+            stream.write_all(json.as_bytes()).await?;
+            stream.write_all(b"\n").await?;
+        }
+    }
+
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+
+    println!("Starting HoneySecret sensor...");
+
+    let stream = TcpStream::connect("10.0.0.210:8080").await?;
+    
+    println!("Connected to logging server");
+
+    stream_ssh_logs(stream).await?;
+
+    Ok(())
+}
+
+/*************************************
 fn main() -> io::Result<()> {
 
     println!("HoneySecret sensor starting...");
@@ -114,3 +174,4 @@ fn main() -> io::Result<()> {
 
     Ok(())
 }
+**************************************/
