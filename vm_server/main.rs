@@ -1,7 +1,7 @@
 use std::net::TcpStream;
 use std::io::{self, Write, BufRead, BufReader};
 use std::process::{Command, Stdio};
-
+use once_cell::sync::Lazy;
 use serde::{Serialize, Deserialize};
 use regex::Regex;
 
@@ -12,8 +12,14 @@ struct SshLog {
     user: String,
     process: String,
     hostname: String,
+    time: String,
     severity: String,
 }
+
+//Compile once an reuse; Increased speed
+static SSH_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(Accepted|Failed)").unwrap()
+});
 
 fn hostname() -> String {
     let output = Command::new("hostname")
@@ -45,6 +51,7 @@ fn parse_ssh_log(line: &str, host: &str, re: &Regex) -> Option<SshLog> {
             user: caps["user"].to_string(),
             process: "sshd".to_string(),
             hostname: host.to_string(),
+            time: caps["date"].to_string(),
             severity: severity.to_string(),
         });
     }
@@ -57,13 +64,15 @@ fn stream_ssh_logs(mut stream: TcpStream) -> io::Result<()> {
     let host = hostname();
 
     let re = Regex::new(
-        r"(?P<status>Accepted|Failed).*for\s+(?P<user>\w+).*from\s+(?P<ip>\d+\.\d+\.\d+\.\d+)"
+        r"(?P<date>\w+{3}\s+\d+\s+\d+\:\d+\:\d+).*(?P<status>Accepted|Failed).*for\s+(?P<user>\w+).*from\s+(?P<ip>\d+\.\d+\.\d+\.\d+)"
     ).unwrap();
 
     let mut child = Command::new("journalctl")
         .arg("-u")
         .arg("ssh")
         .arg("-f")
+        .arg("--since")
+        .arg("now")
         .stdout(Stdio::piped())
         .spawn()
         .expect("journalctl failed");
@@ -77,14 +86,16 @@ fn stream_ssh_logs(mut stream: TcpStream) -> io::Result<()> {
 
         let line = line?;
 
-        if let Some(log) = parse_ssh_log(&line, &host, &re) {
+        if SSH_RE.is_match(&line) {
 
+            let log = parse_ssh_log(&line, &host, &re); 
             let json = serde_json::to_string_pretty(&log).unwrap();
 
             println!("{}", json);
 
             stream.write_all(json.as_bytes())?;
             stream.write_all(b"\n")?;
+            stream.flush()?;
         }
     }
 
