@@ -1,6 +1,3 @@
-//use std::net::TcpStream;
-//use std::io::{self, Write, BufRead, BufReader};
-//use std::process::{Command, Stdio};
 use std::process::Stdio;
 use once_cell::sync::Lazy;
 use serde::{Serialize, Deserialize};
@@ -8,7 +5,6 @@ use regex::Regex;
 use tokio::net::TcpStream;
 use tokio::process::Command;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-
 
 #[derive(Serialize, Deserialize)]
 struct SshLog {
@@ -18,7 +14,6 @@ struct SshLog {
     process: String,
     hostname: String,
     time: String,
-    severity: String,
 }
 
 static SSH_RE: Lazy<Regex> = Lazy::new(|| {
@@ -35,80 +30,37 @@ async fn hostname() -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
+fn attack_type(connection: &str, rsa_key: bool) -> String {
+    
+    match connection {
+        "Accepted" => match rsa_key
+        {
+            true => String::from("PRIVATE_SSH_KEY"), 
+            false => String::from("LOGGED_INNO_KEY"),
+        },
+        "Failed" => String::from("FAILED_LOGIN"),
+        &_ => String::from(""),
+    }
+}
+
 fn parse_ssh_log(line: &str, host: &str, re: &Regex) -> Option<SshLog> {
 
+    let rsa_key = line.contains("RSA");
     if let Some(caps) = re.captures(line) {
 
-        let event = if &caps["status"] == "Accepted" {
-            "ssh_login"
-        } else {
-            "ssh_failed"
-        };
-
-        let severity = if event == "ssh_login" {
-            "CRITICAL_HONEYPOT_ACCESS"
-        } else {
-            "LOW"
-        };
-
+        let attack = attack_type(&caps["status"], rsa_key);
         return Some(SshLog {
-            event: event.to_string(),
+            event: attack,
             ip: caps["ip"].to_string(),
             user: caps["user"].to_string(),
             process: "sshd".to_string(),
             hostname: host.to_string(),
             time: caps["date"].to_string(),
-            severity: severity.to_string(),
         });
     }
 
     None
 }
-
-/***************************************
-fn stream_ssh_logs(mut stream: TcpStream) -> io::Result<()> {
-
-    let host = hostname();
-
-    let re = Regex::new(
-        r"(?P<date>\w+{3}\s+\d+\s+\d+\:\d+\:\d+).*(?P<status>Accepted|Failed).*for\s+(?P<user>\w+).*from\s+(?P<ip>\d+\.\d+\.\d+\.\d+)"
-    ).unwrap();
-
-    let mut child = Command::new("journalctl")
-        .arg("-u")
-        .arg("ssh")
-        .arg("-f")
-        .arg("--since")
-        .arg("now")
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("journalctl failed");
-
-    let stdout = child.stdout.take().unwrap();
-    let reader = BufReader::new(stdout);
-
-    println!("Watching SSH logs...");
-
-    for line in reader.lines() {
-
-        let line = line?;
-
-        if SSH_RE.is_match(&line) {
-
-            let log = parse_ssh_log(&line, &host, &re); 
-            let json = serde_json::to_string_pretty(&log).unwrap();
-
-            println!("{}", json);
-
-            stream.write_all(json.as_bytes())?;
-            stream.write_all(b"\n")?;
-            stream.flush()?;
-        }
-    }
-
-    Ok(())
-}
-**************************************************/
 
 async fn stream_ssh_logs(mut stream: TcpStream) -> Result<(), Box<dyn std::error::Error>> {
 
@@ -160,18 +112,3 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-
-/*************************************
-fn main() -> io::Result<()> {
-
-    println!("HoneySecret sensor starting...");
-
-    let stream = TcpStream::connect("10.0.0.210:8080")?;
-
-    println!("Connected to logging server");
-
-    stream_ssh_logs(stream)?;
-
-    Ok(())
-}
-**************************************/
