@@ -1,12 +1,17 @@
-use std::process::Stdio;
-use once_cell::sync::Lazy;
-use serde::{Serialize, Deserialize};
-use regex::Regex;
-use tokio::net::TcpStream;
-use tokio::process::Command;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncBufReadExt, BufReader};
+use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
+use std::sync::Mutex;
 
-#[derive(Serialize, Deserialize)]
+static BRUTE_DATA: LazyLock<Mutex<HashMap<String, u32>>> = LazyLock::new(|| {
+    let mut m = HashMap::new();
+    m.insert("0.0.0.0".to_string(), 10);
+    Mutex::new(m)
+});
+
+#[derive(Debug, Serialize, Deserialize)]
 struct SshLog {
     event: String,
     ip: String,
@@ -16,85 +21,82 @@ struct SshLog {
     time: String,
 }
 
-static SSH_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?P<date>\w+{3}\s+\d+\s+\d+\:\d+\:\d+).*(?P<status>Accepted|Failed).*for\s+(?P<user>\w+).*from\s+(?P<ip>\d+\.\d+\.\d+\.\d+)")
- .unwrap()
-});
+fn brute_force(attacker: &SshLog) -> bool{
 
-async fn hostname() -> String {
-    let output = Command::new("hostname")
-        .output()
-        .await
-        .expect("hostname failed");
+    let mut bfd = false;
+    let mut data = BRUTE_DATA.lock().unwrap();
 
-    String::from_utf8_lossy(&output.stdout).trim().to_string()
+    if data.contains_key(&attacker.ip) {
+
+        if let Some(attempts) = data.get_mut(&attacker.ip) {
+            *attempts += 1;
+            
+            if *attempts > 5 {
+                bfd = true;
+            }
+        };
+    }
+    else {
+        data.insert(attacker.ip.clone(), 1);
+    }
+    bfd
 }
 
-fn attack_type(connection: &str, rsa_key: bool) -> String {
+async fn detect_attack(log: &SshLog) {
     
-    match connection {
-        "Accepted" => match rsa_key
-        {
-            true => String::from("PRIVATE_SSH_KEY"), 
-            false => String::from("LOGGED_INNO_KEY"),
-        },
-        "Failed" => String::from("FAILED_LOGIN"),
-        &_ => String::from(""),
+    let bfd = brute_force(log);
+
+    let print_profile = |log: &SshLog|
+        println!(
+            "Host: {} \nUser: {} \nAttacker IP: {} \nProcess: {} \nTime: {}",
+            log.hostname,
+            log.user,
+            log.ip,
+            log.process,
+            log.time,
+        );
+    if log.event == "PRIVATE_SSH_KEY" {
+
+        println!("\n🚨 CRITICAL ALERT 🚨 --- PRIVATE KEY LOGIN");
+        print_profile(log);
+    }
+    else if log.event == "LOGGED_INNO_KEY" && bfd {
+        println!("\n🚨 CRITICAL ALERT 🚨 --- BRUTE FORCE LOGIN");
+        print_profile(log);
+    }
+    else if log.event == "FAILED_LOGIN" && bfd {
+        println!("\n🚨 MEDIUM LEVEL ALERT 🚨 --- BRUTE FORCE ATTEMPT");
+        print_profile(log);
+    }
+    else {
+        println!("FAILED LOGIN");
     }
 }
 
-fn parse_ssh_log(line: &str, host: &str, re: &Regex) -> Option<SshLog> {
+async fn handle_client(stream: TcpStream) -> Result<(), Box<dyn std::error::Error>> {
 
-    let rsa_key = line.contains("RSA");
-    if let Some(caps) = re.captures(line) {
+    let addr = stream.peer_addr()?;
+    println!("Sensor connected: {}", addr);
 
-        let attack = attack_type(&caps["status"], rsa_key);
-        return Some(SshLog {
-            event: attack,
-            ip: caps["ip"].to_string(),
-            user: caps["user"].to_string(),
-            process: "sshd".to_string(),
-            hostname: host.to_string(),
-            time: caps["date"].to_string(),
-        });
-    }
-
-    None
-}
-
-async fn stream_ssh_logs(mut stream: TcpStream) -> Result<(), Box<dyn std::error::Error>> {
-
-    let host = hostname().await;
-
-    let mut child = Command::new("journalctl")
-        .arg("-u")
-        .arg("ssh")
-        .arg("-f")
-        .arg("--since")
-        .arg("now")
-        .stdout(Stdio::piped())
-        .spawn()?;
-
-    let stdout = child.stdout.take().unwrap();
-
-    let reader = BufReader::new(stdout);
+    let reader = BufReader::new(stream);
     let mut lines = reader.lines();
-
-    println!("Watching SSH logs...");
 
     while let Some(line) = lines.next_line().await? {
 
-        if SSH_RE.is_match(&line) {
+        match serde_json::from_str::<SshLog>(&line) {
 
-            let log = parse_ssh_log(&line, &host, &SSH_RE);
-            let json = serde_json::to_string(&log)?;
+            Ok(log) => {
 
-            println!("{:#?}", json);
+                detect_attack(&log).await;
+            }
 
-            stream.write_all(json.as_bytes()).await?;
-            stream.write_all(b"\n").await?;
+            Err(_) => {
+                println!("Malformed telemetry: {}", line);
+            }
         }
     }
+
+    println!("Sensor disconnected: {}", addr);
 
     Ok(())
 }
@@ -102,13 +104,23 @@ async fn stream_ssh_logs(mut stream: TcpStream) -> Result<(), Box<dyn std::error
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
-    println!("Starting HoneySecret sensor...");
+    let listener = TcpListener::bind("0.0.0.0:8080").await?;
 
-    let stream = TcpStream::connect("10.0.0.210:8080").await?;
-    
-    println!("Connected to logging server");
+    println!("HoneySecret Logging Server Running");
+    println!("Listening on port 8080\n");
 
-    stream_ssh_logs(stream).await?;
+    loop {
 
-    Ok(())
+        let (stream, addr) = listener.accept().await?;
+
+        println!("Incoming sensor: {}", addr);
+
+        tokio::spawn(async move {
+
+            if let Err(e) = handle_client(stream).await {
+                println!("Client error: {}", e);
+            }
+
+        });
+    }
 }
