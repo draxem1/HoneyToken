@@ -1,0 +1,84 @@
+Step 1: Install and Configure OpenSSH Server on the VM 
+
+    Update package lists inside your VM's terminal:
+    bash
+
+    sudo apt update
+
+    Install the OpenSSH server package:
+    bash
+
+    sudo apt install openssh-server
+
+    Verify the service is running:
+    bash
+
+    sudo systemctl status ssh
+
+    It should show "active (running)".
+    Find your VM's IP address so you can connect from your local machine later:
+    bash
+
+    ip a
+
+    Look for the IP address listed under an interface like eth0 or ensXX. 
+
+Step 2: Generate an SSH Key Pair on Your Local Machine 
+Open a terminal (PowerShell for Windows, Terminal for macOS/Linux) on your local machine and follow these steps: 
+
+    Generate the key pair using ssh-keygen:
+    bash
+
+    ssh-keygen -t rsa -b 4096 -C "your_email@example.com"
+
+        You will be prompted to choose a file location (the default ~/.ssh/id_rsa is recommended).
+        You can enter an optional, secure passphrase for extra security. This is highly recommended.
+    Locate your public and private keys: By default, they are saved in the ~/.ssh directory. The private key file is named id_rsa, and the public key file is id_rsa.pub. 
+
+Step 3: Copy the Public Key to the VM 
+You need to append the content of your public key to the authorized_keys file on the VM. 
+
+    Using ssh-copy-id (Recommended and Easiest):
+    bash
+
+    ssh-copy-id -i ~/.ssh/id_rsa.pub username@vm_ip_address
+
+    Replace username with your VM's username and vm_ip_address with its IP address. You will be prompted for the user's password on the VM for this one-time setup.
+    Manually (if ssh-copy-id is unavailable):
+    bash
+
+    cat ~/.ssh/id_rsa.pub | ssh username@vm_ip_address "mkdir -p ~/.ssh && touch ~/.ssh/authorized_keys && chmod go= ~/.ssh/authorized_keys && cat >> ~/.ssh/authorized_keys"
+
+    This command creates the .ssh directory and authorized_keys file if they don't exist, sets the correct permissions, and appends your public key content. 
+
+Step 4: Login Using the Private Key
+From your local machine's terminal, you can now connect using the private key: 
+bash
+
+ssh username@vm_ip_address
+
+If your private key is not in the default location, you'll need to specify its path with the -i flag: 
+bash
+
+ssh -i /path/to/your/private_key username@vm_ip_address
+
+If you set a passphrase in Step 2, you will be prompted for it now. Otherwise, you should connect without a password. 
+Securing Your Setup (Optional but Recommended)
+Once key-based authentication is working, you should disable password logins to enhance security. 
+
+    Edit the SSH server configuration file on your VM (use nano or another text editor):
+    bash
+
+    sudo nano /etc/ssh/sshd_config
+
+    Find the PasswordAuthentication line, uncomment it (remove the # at the beginning), and change its value to no:
+
+    PasswordAuthentication no
+
+    Save and close the file.
+    Restart the SSH service to apply the changes:
+    bash
+
+    sudo systemctl restart ssh
+
+    Test the connection from a new local terminal window before closing your current session to ensure everything works correctly. 
