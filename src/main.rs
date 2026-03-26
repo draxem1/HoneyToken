@@ -16,6 +16,7 @@ struct SshLog {
     event: String,
     ip: String,
     user: String,
+    command: String,
     process: String,
     hostname: String,
     time: String,
@@ -48,11 +49,12 @@ async fn detect_attack(log: &SshLog) {
 
     let print_profile = |log: &SshLog|
         println!(
-            "Host: {} \nUser: {} \nAttacker IP: {} \nProcess: {} \nTime: {}",
+            "Host: {} \nUser: {} \nAttacker IP: {} \nProcess: {} \nCommand: {} \nTime: {}",
             log.hostname,
             log.user,
             log.ip,
             log.process,
+            log.command,
             log.time,
         );
     if log.event == "PRIVATE_SSH_KEY" {
@@ -60,6 +62,11 @@ async fn detect_attack(log: &SshLog) {
         println!("\n🚨 CRITICAL ALERT 🚨 --- PRIVATE KEY LOGIN");
         print_profile(log);
     }
+    else if log.event == "COMMAND_EXECUTED" {
+     println!("\n🚨 CRITICAL ALERT 🚨 --- COMMAND EXECUTED");
+     print_profile(log);
+    }
+
     else if log.event == "LOGGED_INNO_KEY" && bfd {
         println!("\n🚨 CRITICAL ALERT 🚨 --- BRUTE FORCE LOGIN");
         print_profile(log);
@@ -108,7 +115,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("HoneySecret Logging Server Running");
     println!("Listening on port 8080\n");
-
     loop {
 
         let (stream, addr) = listener.accept().await?;
@@ -116,7 +122,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Incoming sensor: {}", addr);
 
         tokio::spawn(async move {
-
             if let Err(e) = handle_client(stream).await {
                 println!("Client error: {}", e);
             }
