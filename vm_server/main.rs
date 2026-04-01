@@ -46,6 +46,7 @@ static IP_TTY: Lazy<Regex> = Lazy::new(|| {
     //-q is quiet mode
     //
     //
+        
 async fn get_tty(ip: &str, re: &Regex) -> String {
     let output = Command::new("who")
         .output()
@@ -179,11 +180,16 @@ async fn command_task(tx: mpsc::Sender<Event>) -> Result<(), Box<dyn std::error:
         .spawn()?;
 
     let stdout = child.stdout.take().unwrap();
+
     let reader = BufReader::new(stdout);
     let mut lines = reader.lines();
 
+
     while let Some(line) = lines.next_line().await? {
 
+      if line.contains("/dev/pts/0") {
+            continue;
+      }
         if let Some(log) = parse_commands(&line, &TTY_COMM) {
             let event = Event {
                 event: log.event,
@@ -230,3 +236,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
