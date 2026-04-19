@@ -1,0 +1,17 @@
+#!/usr/bin/env bpftrace
+
+uprobe:/lib/x86_64-linux-gnu/libpam.so.0:pam_authenticate {
+    @active_auth[tid] = 1;
+}
+
+uretprobe:/lib/x86_64-linux-gnu/libpam.so.0:pam_authenticate /@active_auth[tid]/ {
+    if (retval != 0) {
+        printf("[FAILED] attempt detected\n");
+    }
+    delete(@active_auth[tid]);
+}
+
+uprobe:/lib/x86_64-linux-gnu/libpam.so.0:pam_open_session {
+    printf("[SUCCESS] login detected\n");
+}
+
